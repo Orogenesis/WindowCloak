@@ -28,15 +28,15 @@ Perfect for any screen sharing scenario where you need to:
 4. Drag **WindowCloak** to the **Applications** folder
 5. Eject the DMG
 
-Since the app isn't code-signed by Apple, you'll need to open it manually the first time:
+Since the app isn't code-signed by Apple, macOS will quarantine it after download. To unblock it:
 
-1. Open **Finder** → **Applications**
-2. Find **WindowCloak**
-3. **Right-click** on WindowCloak
-4. Select **"Open"**
-5. Click **"Open"** in the dialog that appears
+```bash
+xattr -dr com.apple.quarantine /Applications/WindowCloak.app
+```
 
-After the first time, you can open it normally by double-clicking.
+Alternatively, open **System Settings → Privacy & Security** and click **"Open Anyway"** next to the blocked app message.
+
+After unblocking once, you can launch it normally.
 
 ### First Launch
 

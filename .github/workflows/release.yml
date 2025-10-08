@@ -127,10 +127,12 @@ jobs:
 
           ## First Launch
 
-          On first launch, you may see a security warning. To open:
-          1. Right-click (or Control-click) on WindowCloak.app
-          2. Select "Open"
-          3. Click "Open" in the dialog
+          Because the app isn't signed with a Developer ID certificate, macOS marks it as coming from the internet. Unblock it via one of the following:
+
+          - Run `xattr -dr com.apple.quarantine /Applications/WindowCloak.app` after copying it to Applications.
+          - Or open **System Settings → Privacy & Security** and click **Open Anyway** next to the WindowCloak warning.
+
+          After you unblock it once, the app will launch normally.
 
           ## Requirements
 
