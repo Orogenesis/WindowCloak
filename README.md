@@ -13,6 +13,8 @@ Perfect for any screen sharing scenario where you need to:
 - Maintain privacy for specific applications during screen sharing
 - Share your full workflow without revealing sensitive information
 
+https://github.com/user-attachments/assets/172a67b2-f5d4-4268-86ab-52e7e639cdab
+
 ## 📋 Requirements
 
 - macOS 12.3 (Monterey) or later
