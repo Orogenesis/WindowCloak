@@ -63,6 +63,11 @@ jobs:
           echo "app_path=$APP_PATH" >> $GITHUB_OUTPUT
           echo "Found app at: $APP_PATH"
 
+      - name: Ad-hoc sign app bundle
+        run: |
+          codesign --force --deep --options=runtime --sign - "${{ steps.locate.outputs.app_path }}"
+          codesign --verify --deep --strict "${{ steps.locate.outputs.app_path }}"
+
       - name: Create DMG
         id: create_dmg
         run: |
