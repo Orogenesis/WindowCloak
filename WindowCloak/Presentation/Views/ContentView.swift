@@ -65,7 +65,12 @@ private struct ContentViewInternal: View {
                         }
                     )
                 } else if viewModel.isCapturing {
-                    CapturingStatusView()
+                    CapturingStatusView(
+                        onTogglePreview: {
+                            viewModel.togglePreviewWindowVisibility()
+                        },
+                        isPreviewHidden: viewModel.isPreviewWindowHidden
+                    )
                 } else {
                     WelcomeView()
                 }
@@ -416,6 +421,9 @@ struct PermissionRequestView: View {
 // MARK: - CapturingStatusView
 
 struct CapturingStatusView: View {
+    let onTogglePreview: () -> Void
+    let isPreviewHidden: Bool
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -474,6 +482,22 @@ struct CapturingStatusView: View {
                 )
             }
             .padding(.horizontal, 40)
+
+            Spacer()
+                .frame(maxHeight: 28)
+
+            Button(action: onTogglePreview) {
+                HStack(spacing: 8) {
+                    Image(systemName: isPreviewHidden ? "rectangle.on.rectangle.angled" : "eye.slash")
+                    Text(isPreviewHidden ? "Show Preview Window" : "Hide Preview Window")
+                        .fontWeight(.semibold)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(isPreviewHidden ? Color.accentColor : Color.gray)
 
             Spacer()
         }

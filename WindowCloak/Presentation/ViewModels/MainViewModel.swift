@@ -20,6 +20,7 @@ final class MainViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var hasScreenRecordingPermission = false
     @Published var availableApplications: [AppInfo] = []
+    @Published private(set) var isPreviewWindowHidden = true
 
     // MARK: - Dependencies
 
@@ -107,12 +108,16 @@ final class MainViewModel: ObservableObject {
 
         let controller = previewWindowFactory(self)
         controller.showWindow(nil)
+        controller.parkForBackgroundSharing()
         previewWindowController = controller
+        isPreviewWindowHidden = true
     }
 
     private func closePreviewWindow() {
+        previewWindowController?.resetParkingState()
         previewWindowController?.close()
         previewWindowController = nil
+        isPreviewWindowHidden = true
     }
 
     func toggleCapture() async {
@@ -131,6 +136,18 @@ final class MainViewModel: ObservableObject {
             try await captureService.updateFilter(configuration: configuration)
         } catch {
             errorMessage = "Failed to update filter: \(error.localizedDescription)"
+        }
+    }
+
+    func togglePreviewWindowVisibility() {
+        guard let controller = previewWindowController else { return }
+
+        if controller.isParked {
+            controller.presentToUser()
+            isPreviewWindowHidden = false
+        } else {
+            controller.parkForBackgroundSharing()
+            isPreviewWindowHidden = true
         }
     }
 
