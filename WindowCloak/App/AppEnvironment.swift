@@ -17,21 +17,32 @@ final class AppEnvironment: ObservableObject {
     let appCoordinator: AppCoordinator
     let configurationRepository: ConfigurationRepository
 
+    private let dockIconController: DockIconControlling
     private let screenCaptureService: ScreenCaptureService
     private let permissionService: PermissionServiceProtocol
     private let previewWindowFactory: PreviewWindowFactory
+    private var cancellables = Set<AnyCancellable>()
 
     init(
-        configurationRepository: ConfigurationRepository = ConfigurationRepository(),
-        screenCaptureService: ScreenCaptureService = ScreenCaptureService(),
-        permissionService: PermissionServiceProtocol = PermissionService(),
+        configurationRepositoryFactory: @MainActor () -> ConfigurationRepository = { ConfigurationRepository() },
+        screenCaptureServiceFactory: @MainActor () -> ScreenCaptureService = { ScreenCaptureService() },
+        permissionServiceFactory: @MainActor () -> PermissionServiceProtocol = { PermissionService() },
+        dockIconControllerFactory: @MainActor () -> DockIconControlling = { DockIconController() },
         previewWindowFactory: @escaping PreviewWindowFactory = { DefaultPreviewWindowControllerFactory().make(viewModel: $0) }
     ) {
-        self.configurationRepository = configurationRepository
-        self.screenCaptureService = screenCaptureService
-        self.permissionService = permissionService
+        let resolvedRepository = configurationRepositoryFactory()
+        let resolvedScreenCaptureService = screenCaptureServiceFactory()
+        let resolvedPermissionService = permissionServiceFactory()
+        let resolvedDockIconController = dockIconControllerFactory()
+
+        self.configurationRepository = resolvedRepository
+        self.screenCaptureService = resolvedScreenCaptureService
+        self.permissionService = resolvedPermissionService
+        self.dockIconController = resolvedDockIconController
         self.previewWindowFactory = previewWindowFactory
         self.appCoordinator = AppCoordinator()
+
+        setupDockIconBinding()
     }
 
     func makeMainViewModel() -> MainViewModel {
@@ -45,5 +56,18 @@ final class AppEnvironment: ObservableObject {
 
     func makeSettingsViewModel() -> SettingsViewModel {
         SettingsViewModel(configurationRepository: configurationRepository)
+    }
+
+    private func setupDockIconBinding() {
+        dockIconController.updateVisibility(showDockIcon: configurationRepository.currentConfiguration.showDockIcon)
+
+        configurationRepository.$currentConfiguration
+            .map(\.showDockIcon)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] showDockIcon in
+                self?.dockIconController.updateVisibility(showDockIcon: showDockIcon)
+            }
+            .store(in: &cancellables)
     }
 }

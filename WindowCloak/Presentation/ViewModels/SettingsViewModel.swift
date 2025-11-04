@@ -16,6 +16,7 @@ final class SettingsViewModel: ObservableObject {
 
     @Published var hiddenApplications: Set<String>
     @Published var hideCursor: Bool
+    @Published var showDockIcon: Bool
     @Published var errorMessage: String?
 
     // MARK: - Dependencies
@@ -31,6 +32,7 @@ final class SettingsViewModel: ObservableObject {
         let config = self.configurationRepository.currentConfiguration
         self.hiddenApplications = config.hiddenApplications
         self.hideCursor = config.hideCursor
+        self.showDockIcon = config.showDockIcon
 
         setupBindings()
     }
@@ -39,7 +41,11 @@ final class SettingsViewModel: ObservableObject {
 
     func saveConfiguration() {
         do {
-            let configuration = FilterConfiguration(hiddenApplications: hiddenApplications, hideCursor: hideCursor)
+            let configuration = FilterConfiguration(
+                hiddenApplications: hiddenApplications,
+                hideCursor: hideCursor,
+                showDockIcon: showDockIcon
+            )
             try configurationRepository.update(configuration)
             errorMessage = nil
         } catch {
@@ -62,6 +68,11 @@ final class SettingsViewModel: ObservableObject {
         saveConfiguration()
     }
 
+    func setShowDockIcon(_ isVisible: Bool) {
+        showDockIcon = isVisible
+        saveConfiguration()
+    }
+
     func resetToDefaults() {
         do {
             try configurationRepository.reset()
@@ -78,6 +89,7 @@ final class SettingsViewModel: ObservableObject {
             .sink { [weak self] config in
                 self?.hiddenApplications = config.hiddenApplications
                 self?.hideCursor = config.hideCursor
+                self?.showDockIcon = config.showDockIcon
             }
             .store(in: &cancellables)
     }

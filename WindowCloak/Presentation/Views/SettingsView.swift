@@ -235,6 +235,16 @@ struct CaptureSettingsView: View {
                 )
             )
 
+            SettingToggleCard(
+                title: "Show WindowCloak in Dock",
+                subtitle: "Keep the app visible in the Dock and Command-Tab switcher.",
+                systemImage: "dock.rectangle",
+                isOn: Binding(
+                    get: { viewModel.showDockIcon },
+                    set: { viewModel.setShowDockIcon($0) }
+                )
+            )
+
             Spacer()
         }
         .padding(24)
@@ -251,44 +261,52 @@ struct SettingToggleCard: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        Toggle(isOn: $isOn) {
-            HStack(alignment: .center, spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(LinearGradient(
-                            colors: [
-                                Color.blue.opacity(0.15),
-                                Color.purple.opacity(0.15)
-                            ],
+        HStack(alignment: .center, spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.15),
+                            Color.purple.opacity(0.15)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 48, height: 48)
+
+                Image(systemName: systemImage)
+                    .font(.title2)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .purple],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
-                        ))
-                        .frame(width: 48, height: 48)
-
-                    Image(systemName: systemImage)
-                        .font(.title2)
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.blue, .purple],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
                         )
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                    )
             }
+            .layoutPriority(2)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .layoutPriority(2)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel(Text(title))
+                .layoutPriority(2)
         }
-        .toggleStyle(.switch)
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 16)
@@ -299,6 +317,7 @@ struct SettingToggleCard: View {
                 .stroke(Color(NSColor.separatorColor).opacity(0.2), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.07), radius: 8, x: 0, y: 4)
+        .frame(maxWidth: .infinity)
     }
 }
 
