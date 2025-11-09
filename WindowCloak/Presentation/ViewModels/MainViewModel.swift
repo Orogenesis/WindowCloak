@@ -47,6 +47,9 @@ final class MainViewModel: ObservableObject {
 
         setupBindings()
         self.captureService.delegate = self
+        self.captureService.hiddenWindowPruningHandler = { [weak self] hiddenWindows in
+            self?.configurationRepository.updateHiddenWindowsCache(hiddenWindows)
+        }
     }
 
     // MARK: - Public Methods
@@ -156,6 +159,14 @@ final class MainViewModel: ObservableObject {
     private func setupBindings() {
         configurationRepository.$currentConfiguration
             .dropFirst()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    await self?.updateFilter()
+                }
+            }
+            .store(in: &cancellables)
+
+        WindowEventsNotifier.shared.publisher
             .sink { [weak self] _ in
                 Task { @MainActor in
                     await self?.updateFilter()
