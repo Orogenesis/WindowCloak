@@ -58,6 +58,8 @@ final class ScreenCaptureService: NSObject {
     private let filterEngine: WindowFilterEngine
     private let permissionService: PermissionServiceProtocol
 
+    var hiddenWindowPruningHandler: (([String: Set<CGWindowID>]) -> Void)?
+
     @Published private(set) var isRunning = false
     @Published private(set) var availableDisplays: [SCDisplay] = []
     @Published private(set) var availableApplications: [AppInfo] = []
@@ -111,19 +113,26 @@ final class ScreenCaptureService: NSObject {
             selectedDisplay = mainDisplay
         }
 
+        let sanitizedConfiguration = sanitizeHiddenWindowSelections(
+            configuration: configuration,
+            windows: content.windows
+        )
+
         // Add WindowCloak itself to excluded apps.
-        var excludedApps = configuration.hiddenApplications
+        var excludedApps = sanitizedConfiguration.hiddenApplications
         if let bundleId = Bundle.main.bundleIdentifier {
             excludedApps.insert(bundleId)
         }
 
         let filter = filterEngine.createContentFilter(
             from: content.applications,
+            windows: content.windows,
             excluding: excludedApps,
+            hiddenWindowsByApp: sanitizedConfiguration.hiddenWindowsByApp,
             display: selectedDisplay
         )
 
-        let streamConfig = makeStreamConfiguration(for: selectedDisplay, configuration: configuration)
+        let streamConfig = makeStreamConfiguration(for: selectedDisplay, configuration: sanitizedConfiguration)
 
         let stream = SCStream(filter: filter, configuration: streamConfig, delegate: self)
         let output = StreamOutput(delegate: self)
@@ -172,19 +181,26 @@ final class ScreenCaptureService: NSObject {
             throw ScreenCaptureError.noDisplayAvailable
         }
 
+        let sanitizedConfiguration = sanitizeHiddenWindowSelections(
+            configuration: configuration,
+            windows: content.windows
+        )
+
         // Add WindowCloak itself to excluded apps.
-        var excludedApps = configuration.hiddenApplications
+        var excludedApps = sanitizedConfiguration.hiddenApplications
         if let bundleId = Bundle.main.bundleIdentifier {
             excludedApps.insert(bundleId)
         }
 
         let filter = filterEngine.createContentFilter(
             from: content.applications,
+            windows: content.windows,
             excluding: excludedApps,
+            hiddenWindowsByApp: sanitizedConfiguration.hiddenWindowsByApp,
             display: selectedDisplay
         )
 
-        let streamConfig = makeStreamConfiguration(for: selectedDisplay, configuration: configuration)
+        let streamConfig = makeStreamConfiguration(for: selectedDisplay, configuration: sanitizedConfiguration)
 
         try await stream.updateContentFilter(filter)
         try await stream.updateConfiguration(streamConfig)
@@ -218,6 +234,24 @@ private extension ScreenCaptureService {
         streamConfig.showsCursor = !configuration.hideCursor
         streamConfig.pixelFormat = kCVPixelFormatType_32BGRA
         return streamConfig
+    }
+
+    func sanitizeHiddenWindowSelections(
+        configuration: FilterConfiguration,
+        windows: [SCWindow]
+    ) -> FilterConfiguration {
+        let availableIds = Set(windows.map(\.windowID))
+        let sanitized = configuration.pruningHiddenWindows(with: availableIds)
+
+        guard sanitized.hiddenWindowsByApp != configuration.hiddenWindowsByApp else {
+            return configuration
+        }
+
+        Task { @MainActor [weak self] in
+            self?.hiddenWindowPruningHandler?(sanitized.hiddenWindowsByApp)
+        }
+
+        return sanitized
     }
 }
 
