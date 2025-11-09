@@ -7,6 +7,7 @@
 
 import Foundation
 import ScreenCaptureKit
+import CoreGraphics
 
 // MARK: - WindowFilterStrategy
 
@@ -46,7 +47,9 @@ final class WindowFilterEngine {
     /// - Returns: Content filter for screen capture.
     func createContentFilter(
         from applications: [SCRunningApplication],
+        windows: [SCWindow],
         excluding excludedBundleIds: Set<String>,
+        hiddenWindowsByApp: [String: Set<CGWindowID>],
         display: SCDisplay
     ) -> SCContentFilter {
         let appsToExclude = applications.filter { app in
@@ -54,10 +57,43 @@ final class WindowFilterEngine {
             return excludedBundleIds.contains(bundleId)
         }
 
+        let exceptedWindows = Self.makeExceptedWindows(
+            for: excludedBundleIds,
+            hiddenWindowsByApp: hiddenWindowsByApp,
+            windows: windows
+        )
+
         return SCContentFilter(
             display: display,
             excludingApplications: appsToExclude,
-            exceptingWindows: []
+            exceptingWindows: exceptedWindows
         )
+    }
+
+    private static func makeExceptedWindows(
+        for excludedBundleIds: Set<String>,
+        hiddenWindowsByApp: [String: Set<CGWindowID>],
+        windows: [SCWindow]
+    ) -> [SCWindow] {
+        guard !hiddenWindowsByApp.isEmpty else { return [] }
+
+        let windowsByBundle = Dictionary(grouping: windows) { window -> String in
+            window.owningApplication?.bundleIdentifier ?? ""
+        }
+
+        var exceptedWindows: [SCWindow] = []
+
+        for (bundleId, hiddenWindowIDs) in hiddenWindowsByApp {
+            guard excludedBundleIds.contains(bundleId),
+                  let bundleWindows = windowsByBundle[bundleId] else { continue }
+
+            let visibleWindows = bundleWindows.filter { scWindow in
+                !hiddenWindowIDs.contains(scWindow.windowID) && scWindow.isOnScreen
+            }
+
+            exceptedWindows.append(contentsOf: visibleWindows)
+        }
+
+        return exceptedWindows
     }
 }

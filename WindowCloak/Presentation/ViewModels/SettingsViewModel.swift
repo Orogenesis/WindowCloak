@@ -7,6 +7,8 @@
 
 import Foundation
 import Combine
+import CoreGraphics
+import AppKit
 
 // MARK: - SettingsViewModel
 
@@ -17,6 +19,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var hiddenApplications: Set<String>
     @Published var hideCursor: Bool
     @Published var showDockIcon: Bool
+    @Published var hiddenWindowsByApp: [String: Set<CGWindowID>]
     @Published var errorMessage: String?
 
     // MARK: - Dependencies
@@ -33,6 +36,7 @@ final class SettingsViewModel: ObservableObject {
         self.hiddenApplications = config.hiddenApplications
         self.hideCursor = config.hideCursor
         self.showDockIcon = config.showDockIcon
+        self.hiddenWindowsByApp = config.hiddenWindowsByApp
 
         setupBindings()
     }
@@ -43,6 +47,7 @@ final class SettingsViewModel: ObservableObject {
         do {
             let configuration = FilterConfiguration(
                 hiddenApplications: hiddenApplications,
+                hiddenWindowsByApp: hiddenWindowsByApp,
                 hideCursor: hideCursor,
                 showDockIcon: showDockIcon
             )
@@ -56,8 +61,11 @@ final class SettingsViewModel: ObservableObject {
     func toggleApplication(_ bundleIdentifier: String) {
         if hiddenApplications.contains(bundleIdentifier) {
             hiddenApplications.remove(bundleIdentifier)
+            hiddenWindowsByApp[bundleIdentifier] = nil
         } else {
             hiddenApplications.insert(bundleIdentifier)
+            // Hide entire app by default; ensure no stale overrides.
+            hiddenWindowsByApp[bundleIdentifier] = nil
         }
     
         saveConfiguration()
@@ -82,6 +90,25 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    func hiddenWindowIDs(for bundleIdentifier: String) -> Set<CGWindowID> {
+        hiddenWindowsByApp[bundleIdentifier] ?? []
+    }
+
+    func isCustomWindowSelectionEnabled(for bundleIdentifier: String) -> Bool {
+        hiddenWindowsByApp[bundleIdentifier] != nil
+    }
+
+    func updateHiddenWindows(_ windowIDs: Set<CGWindowID>, for bundleIdentifier: String) {
+        guard hiddenApplications.contains(bundleIdentifier) else { return }
+        hiddenWindowsByApp[bundleIdentifier] = windowIDs
+        saveConfiguration()
+    }
+
+    func clearHiddenWindows(for bundleIdentifier: String) {
+        hiddenWindowsByApp[bundleIdentifier] = nil
+        saveConfiguration()
+    }
+
     // MARK: - Private Methods
 
     private func setupBindings() {
@@ -90,7 +117,46 @@ final class SettingsViewModel: ObservableObject {
                 self?.hiddenApplications = config.hiddenApplications
                 self?.hideCursor = config.hideCursor
                 self?.showDockIcon = config.showDockIcon
+                self?.hiddenWindowsByApp = config.hiddenWindowsByApp
             }
             .store(in: &cancellables)
+
+        WindowEventsNotifier.shared.publisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                self?.pruneClosedHiddenWindows()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func pruneClosedHiddenWindows() {
+        guard !hiddenWindowsByApp.isEmpty else { return }
+        guard let windowInfoList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return
+        }
+
+        let availableWindowIDs = Set(
+            windowInfoList.compactMap { info in
+                info[kCGWindowNumber as String] as? CGWindowID
+            }
+        )
+
+        var updated = hiddenWindowsByApp
+        var didChange = false
+
+        for (bundleId, storedIDs) in hiddenWindowsByApp {
+            let pruned = storedIDs.intersection(availableWindowIDs)
+            if pruned != storedIDs {
+                updated[bundleId] = pruned
+                didChange = true
+            }
+        }
+
+        guard didChange else { return }
+        hiddenWindowsByApp = updated
+        saveConfiguration()
     }
 }

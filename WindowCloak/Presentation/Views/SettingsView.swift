@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+import ScreenCaptureKit
+import CoreGraphics
+import Combine
 
 // MARK: - SettingsView
 
@@ -164,8 +167,16 @@ struct ApplicationsView: View {
                         ForEach(Array(viewModel.hiddenApplications), id: \.self) { bundleId in
                             HiddenAppCard(
                                 bundleIdentifier: bundleId,
+                                isCustomSelectionActive: viewModel.isCustomWindowSelectionEnabled(for: bundleId),
+                                hiddenWindowIDs: viewModel.hiddenWindowIDs(for: bundleId),
                                 onRemove: {
                                     viewModel.toggleApplication(bundleId)
+                                },
+                                onUpdateHiddenWindows: { windowIDs in
+                                    viewModel.updateHiddenWindows(windowIDs, for: bundleId)
+                                },
+                                onDisableCustomSelection: {
+                                    viewModel.clearHiddenWindows(for: bundleId)
                                 }
                             )
                         }
@@ -348,10 +359,15 @@ struct EmptyStateView: View {
 
 struct HiddenAppCard: View {
     let bundleIdentifier: String
+    let isCustomSelectionActive: Bool
+    let hiddenWindowIDs: Set<CGWindowID>
     let onRemove: () -> Void
+    let onUpdateHiddenWindows: (Set<CGWindowID>) -> Void
+    let onDisableCustomSelection: () -> Void
 
     @State private var appName: String?
     @State private var appIcon: NSImage?
+    @State private var showingWindowPicker = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -382,6 +398,13 @@ struct HiddenAppCard: View {
 
             Spacer()
 
+            Button(action: { showingWindowPicker = true }) {
+                Label(windowButtonTitle, systemImage: buttonIconName)
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title3)
@@ -396,6 +419,21 @@ struct HiddenAppCard: View {
         .task {
             loadAppInfo()
         }
+        .sheet(isPresented: $showingWindowPicker) {
+            WindowPickerView(
+                bundleIdentifier: bundleIdentifier,
+                appDisplayName: appName ?? bundleIdentifier,
+                appIcon: appIcon,
+                isCustomSelectionActive: isCustomSelectionActive,
+                initialHiddenWindowIDs: hiddenWindowIDs,
+                onApplySelection: { selection in
+                    onUpdateHiddenWindows(selection)
+                },
+                onDisableCustomSelection: {
+                    onDisableCustomSelection()
+                }
+            )
+        }
     }
 
     private func loadAppInfo() {
@@ -403,6 +441,23 @@ struct HiddenAppCard: View {
             appName = FileManager.default.displayName(atPath: appURL.path)
             appIcon = NSWorkspace.shared.icon(forFile: appURL.path)
         }
+    }
+
+    private var windowButtonTitle: String {
+        guard isCustomSelectionActive, hiddenWindowIDs.count > 0 else {
+            return "Choose Windows"
+        }
+
+        let count = hiddenWindowIDs.count
+        let suffix = count == 1 ? "window hidden" : "windows hidden"
+        return "\(count) \(suffix)"
+    }
+
+    private var buttonIconName: String {
+        guard isCustomSelectionActive, hiddenWindowIDs.count > 0 else {
+            return "macwindow.on.rectangle"
+        }
+        return "checkmark.square.fill"
     }
 }
 
@@ -594,6 +649,417 @@ struct AppPickerCard: View {
             .padding(12)
             .background(isHidden ? Color.accentColor.opacity(0.1) : Color(NSColor.controlBackgroundColor))
             .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - WindowPickerView
+
+private enum WindowHidingMode: String, CaseIterable, Identifiable {
+    case all
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "Hide All Windows"
+        case .custom:
+            return "Choose Specific Windows"
+        }
+    }
+}
+
+struct WindowPickerView: View {
+    let bundleIdentifier: String
+    let appDisplayName: String
+    let appIcon: NSImage?
+    let isCustomSelectionActive: Bool
+    let initialHiddenWindowIDs: Set<CGWindowID>
+    let onApplySelection: (Set<CGWindowID>) -> Void
+    let onDisableCustomSelection: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var hideMode: WindowHidingMode
+    @State private var windows: [WindowPickerItem] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var selectedWindowIDs: Set<CGWindowID>
+    @State private var cachedCustomSelection: Set<CGWindowID>
+    @State private var hasInitializedCustomSelection: Bool
+    @State private var reloadTask: Task<Void, Never>?
+
+    init(
+        bundleIdentifier: String,
+        appDisplayName: String,
+        appIcon: NSImage?,
+        isCustomSelectionActive: Bool,
+        initialHiddenWindowIDs: Set<CGWindowID>,
+        onApplySelection: @escaping (Set<CGWindowID>) -> Void,
+        onDisableCustomSelection: @escaping () -> Void
+    ) {
+        self.bundleIdentifier = bundleIdentifier
+        self.appDisplayName = appDisplayName
+        self.appIcon = appIcon
+        self.isCustomSelectionActive = isCustomSelectionActive
+        self.initialHiddenWindowIDs = initialHiddenWindowIDs
+        self.onApplySelection = onApplySelection
+        self.onDisableCustomSelection = onDisableCustomSelection
+
+        _hideMode = State(initialValue: isCustomSelectionActive ? .custom : .all)
+        _selectedWindowIDs = State(initialValue: initialHiddenWindowIDs)
+        _cachedCustomSelection = State(initialValue: initialHiddenWindowIDs)
+        _hasInitializedCustomSelection = State(initialValue: isCustomSelectionActive)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            modeSelector
+            Divider()
+            content
+            Divider()
+            footer
+        }
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 500)
+        .task {
+            await loadWindows()
+        }
+        .onReceive(WindowEventsNotifier.shared.publisher) { _ in
+            scheduleWindowReload()
+        }
+        .onDisappear {
+            reloadTask?.cancel()
+        }
+        .onChange(of: hideMode) { _, newValue in
+            handleModeChange(newValue)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            if let icon = appIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 44, height: 44)
+                    .cornerRadius(8)
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        Image(systemName: "app")
+                            .foregroundColor(.secondary)
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(appDisplayName)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+
+                Text(bundleIdentifier)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(20)
+    }
+
+    private var modeSelector: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Hiding Mode")
+                .font(.headline)
+                .padding(.top, 12)
+
+            Picker("", selection: $hideMode) {
+                ForEach(WindowHidingMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+    }
+
+    private var content: some View {
+        Group {
+            switch hideMode {
+            case .all:
+                VStack(spacing: 12) {
+                    Image(systemName: "rectangle.stack.badge.minus")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+
+                    Text("All windows will stay hidden.")
+                        .font(.headline)
+
+                    Text("Switch to \"Choose Specific Windows\" to hide selected windows only.")
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            case .custom:
+                if isLoading {
+                    ProgressView("Loading windows…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding()
+                } else if let errorMessage {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 32))
+                            .foregroundColor(.orange)
+
+                        Text("Unable to load windows")
+                            .font(.headline)
+
+                        Text(errorMessage)
+                            .font(.subheadline)
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+
+                        Button("Try Again") {
+                            Task {
+                                await loadWindows()
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else if windows.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "macwindow.on.rectangle")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+
+                        Text("No windows found")
+                            .font(.headline)
+
+                        Text("Open a window for \(appDisplayName) and refresh the list.")
+                            .font(.subheadline)
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Select windows to hide")
+                                .font(.headline)
+
+                            Spacer()
+
+                            Button("Select All") {
+                                selectAllWindows()
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Clear") {
+                                clearSelection()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                ForEach(windows) { window in
+                                    WindowPickerRow(
+                                        window: window,
+                                        isSelected: selectedWindowIDs.contains(window.id),
+                                        onToggle: { toggleWindow(window.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var footer: some View {
+        HStack {
+            Button("Cancel") {
+                dismiss()
+            }
+
+            Spacer()
+
+            Button("Save") {
+                applyChanges()
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(20)
+    }
+
+    private func handleModeChange(_ mode: WindowHidingMode) {
+        switch mode {
+        case .all:
+            cachedCustomSelection = selectedWindowIDs
+        case .custom:
+            initializeCustomSelectionIfNeeded()
+        }
+    }
+
+    private func initializeCustomSelectionIfNeeded() {
+        guard !windows.isEmpty else { return }
+        guard !hasInitializedCustomSelection else { return }
+
+        let availableIds = Set(windows.map(\.id))
+        cachedCustomSelection = availableIds
+        selectedWindowIDs = availableIds
+        hasInitializedCustomSelection = true
+    }
+
+    private func toggleWindow(_ windowID: CGWindowID) {
+        if selectedWindowIDs.contains(windowID) {
+            selectedWindowIDs.remove(windowID)
+        } else {
+            selectedWindowIDs.insert(windowID)
+        }
+     
+        cachedCustomSelection = selectedWindowIDs
+    }
+
+    private func selectAllWindows() {
+        let ids = Set(windows.map(\.id))
+        selectedWindowIDs = ids
+        cachedCustomSelection = ids
+    }
+
+    private func clearSelection() {
+        selectedWindowIDs.removeAll()
+        cachedCustomSelection.removeAll()
+    }
+
+    private func applyChanges() {
+        switch hideMode {
+        case .all:
+            onDisableCustomSelection()
+        case .custom:
+            onApplySelection(selectedWindowIDs)
+        }
+    
+        dismiss()
+    }
+
+    private func scheduleWindowReload() {
+        reloadTask?.cancel()
+        reloadTask = Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await loadWindows()
+        }
+    }
+
+    private func loadWindows() async {
+        await MainActor.run {
+            if windows.isEmpty {
+                isLoading = true
+                errorMessage = nil
+            }
+        }
+
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+
+            let filtered = content.windows
+                .filter { $0.owningApplication?.bundleIdentifier == bundleIdentifier }
+                .map(WindowPickerItem.init)
+                .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+
+            let availableIds = Set(filtered.map(\.id))
+
+            await MainActor.run {
+                windows = filtered
+                errorMessage = nil
+                isLoading = false
+                pruneSelectionIfNeeded(availableWindowIDs: availableIds)
+                if hideMode == .custom {
+                    initializeCustomSelectionIfNeeded()
+                }
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                isLoading = false
+            }
+        }
+    }
+
+    @MainActor
+    private func pruneSelectionIfNeeded(availableWindowIDs: Set<CGWindowID>) {
+        guard !selectedWindowIDs.isEmpty else { return }
+
+        let pruned = selectedWindowIDs.intersection(availableWindowIDs)
+        if pruned != selectedWindowIDs {
+            selectedWindowIDs = pruned
+            cachedCustomSelection = pruned
+        }
+    }
+}
+
+private struct WindowPickerItem: Identifiable, Hashable {
+    let id: CGWindowID
+    let title: String
+    let frame: CGRect
+
+    init(window: SCWindow) {
+        self.id = window.windowID
+        if let title = window.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.title = title
+        } else {
+            self.title = "Untitled Window #\(window.windowID)"
+        }
+        self.frame = window.frame
+    }
+}
+
+private struct WindowPickerRow: View {
+    let window: WindowPickerItem
+    let isSelected: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
+
+                Text(window.title)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text("#\(window.id)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.accentColor.opacity(0.1) : Color(NSColor.controlBackgroundColor))
+            )
         }
         .buttonStyle(.plain)
     }

@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import CoreGraphics
 
 // MARK: - ConfigurationRepository
 
@@ -77,5 +78,13 @@ final class ConfigurationRepository: ObservableObject {
     /// Resets to default configuration.
     func reset() throws {
         try update(FilterConfiguration())
+    }
+
+    /// Updates the in-memory hidden window selections without persisting them.
+    func updateHiddenWindowsCache(_ hiddenWindowsByApp: [String: Set<CGWindowID>]) {
+        guard currentConfiguration.hiddenWindowsByApp != hiddenWindowsByApp else { return }
+        var config = currentConfiguration
+        config.hiddenWindowsByApp = hiddenWindowsByApp
+        currentConfiguration = config
     }
 }
